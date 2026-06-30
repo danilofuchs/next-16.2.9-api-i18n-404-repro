@@ -1,7 +1,10 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  // Pages Router i18n with a NON-English default locale.
-  // This is one of the three ingredients of the bug.
+  reactStrictMode: true,
+  // typedRoutes changes how routes are registered/validated — present in the
+  // apps that reproduce the bug.
+  typedRoutes: true,
+  // Pages Router i18n with a NON-English default locale. One of the ingredients.
   i18n: {
     locales: ["en", "pt-BR"],
     defaultLocale: "pt-BR",
