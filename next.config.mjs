@@ -9,11 +9,16 @@ const config = {
     locales: ["en", "pt-BR"],
     defaultLocale: "pt-BR",
   },
+  // salvy-dashboard-style redirects, including DYNAMIC (:param) sources — these
+  // exercise the same parametrized route-table machinery implicated in the
+  // 16.2.x "catch-all router.query corruption with rewrites" regression.
+  redirects: async () => [
+    { source: "/settings", destination: "/settings/company", permanent: false },
+    { source: "/saas/invoice/:id", destination: "/saas/invoice", permanent: false },
+    { source: "/phone-account/new/:formId", destination: "/phone-account/new/:formId/x", permanent: false },
+  ],
 };
 
-// withSentryConfig's build-time config transformation is the missing ingredient
-// that triggers the dynamic-/api 404 on Vercel. No DSN / instrumentation files are
-// needed — wrapping the config is enough (this mirrors the reporter's repro).
 const sentryBuildOptions = { silent: true };
 
 export default withSentryConfig(config, sentryBuildOptions);
