@@ -1,79 +1,55 @@
-# next 16.2.x — dynamic Pages Router API routes 404 on Vercel with i18n + proxy matcher
+# next 16.2.x — Pages Router dynamic API routes 404 on Vercel (i18n + proxy + tRPC)
 
-Minimal reproduction of **[vercel/next.js#92114](https://github.com/vercel/next.js/issues/92114)**.
+Faithful minimal match of the setup reported in
+**[vercel/next.js#92114](https://github.com/vercel/next.js/issues/92114)**: a Pages Router app
+with i18n (non-default-prefixed default locale), a `proxy` whose matcher runs on `/api`, and a
+tRPC API route. In the affected environments the dynamic API route (`/api/trpc/*`) is normalized
+to the default-locale prefix (`/pt-BR/...`) and returns **404** on Vercel, while working locally.
 
-A **dynamic** Pages Router API route (`pages/api/trpc/[trpc].js`) works locally with
-`next build && next start` but returns **404 on Vercel deployments**. The request is internally
-normalized to the default-locale prefix (`x-matched-path: /pt-BR/404`) and never reaches the API
-handler.
+## ⚠️ Reproduction status (important)
 
-A **static** API route (`pages/api/hello.js`) in the same app keeps working on Vercel — so the
-bug is specific to **dynamic/parametrized API routes**.
+- **Locally (`next build && next start`): always works** — `/api/trpc/hello` → `200` JSON.
+- **On Vercel Hobby (this project's deploys): also works** — `/api/trpc/hello` → `200`,
+  `x-matched-path: /api/trpc/[trpc]`. I could **not** reproduce the 404 here even after matching
+  the reporting app's full stack (see below).
+- **The 404 reproduces in the original reporter's environment and in a separate production app
+  running this exact configuration on a Vercel _Pro_ team.** Current evidence points to the
+  trigger living in Vercel's build/routing infrastructure (tier/builder-version dependent),
+  not in the Next.js app config alone.
 
-## Live demo
+So this repo is a faithful **configuration** reproduction; whether the 404 manifests appears to
+depend on the Vercel build environment.
 
-Deployed on Vercel (next 16.2.9):
+## Ingredients (all present here)
 
-```bash
-BASE=https://next-16-2-9-api-i18n-404-repro.vercel.app
+1. Pages Router i18n, non-default-prefixed default locale — `next.config.mjs`:
+   `i18n: { locales: ["en", "pt-BR"], defaultLocale: "pt-BR" }`
+2. A Next.js 16 `proxy` (renamed middleware) whose matcher runs on `/api` — `proxy.js`
+   (broad negative-lookahead matcher + `"/(api|trpc)(.*)"`), using `@vercel/functions`
+   `geolocation()` like the reporting apps.
+3. A real tRPC router via `createNextApiHandler` at `pages/api/trpc/[trpc].js`, plus the tRPC
+   client integration (`api.withTRPC` in `pages/_app.js`).
+4. `typedRoutes: true`, `@sentry/nextjs` (`withSentryConfig`), and `redirects()` — all matching
+   the reporting apps.
 
-# Dynamic API route — BROKEN on Vercel ❌
-curl -sS -D - -o /dev/null "$BASE/api/trpc/hello" | grep -iE 'HTTP/|x-matched-path|content-type'
-# → HTTP/2 404 ; x-matched-path: /pt-BR/404 ; content-type: text/html
-
-# Static API route — works on Vercel ✅
-curl -sS -D - -o /dev/null "$BASE/api/hello" | grep -iE 'HTTP/|x-matched-path|content-type'
-# → HTTP/2 200 ; x-matched-path: /api/hello ; content-type: application/json
-```
-
-## The ingredients
-
-1. **Pages Router i18n with a non-default-prefixed default locale** — `next.config.mjs`:
-   ```js
-   i18n: { locales: ["en", "pt-BR"], defaultLocale: "pt-BR" }
-   ```
-2. **A Next.js 16 `proxy` (renamed middleware) with a broad matcher that also matches `/api`** —
-   `proxy.js`. The critical entry is the broad negative-lookahead matcher (it only excludes
-   `_next` and static file extensions, so `/api/*` is matched as if it were a page):
-   ```js
-   export const config = {
-     matcher: [
-       "/((?!_next|[^?]*\\.(?:html?|css|js(?!on)|jpe?g|webp|png|gif|svg|ttf|woff2?|ico|csv|docx?|xlsx?|zip|webmanifest)).*)",
-       "/(api|trpc)(.*)",
-       "/",
-     ],
-   };
-   ```
-   (The proxy body is a no-op pass-through; only the matcher matters.)
-3. **A dynamic Pages Router API route** — `pages/api/trpc/[trpc].js`.
-
-Suspected cause: the security patch **GHSA-36qx-fr4f-26g5** (shipped in 16.2.5+) prepends the
-default locale to locale-less paths to close a middleware-bypass hole; on Vercel's build output
-this normalization is incorrectly applied to dynamic `/api/*` routes, rewriting
-`/api/trpc/x` → `/pt-BR/api/trpc/x`, which misses the API function and falls to the localized
-404 page.
+A **static** API route (`pages/api/hello.js`) is included for contrast.
 
 ## Versions
 
-- `next` 16.2.9 (latest stable; bug present across the whole 16.2.x line, first reported on 16.2.1)
-- `react` / `react-dom` 19.2.4
+- `next` 16.2.9 (latest stable), `react`/`react-dom` 19.2.4, `@trpc/*` 11, `@sentry/nextjs` 10.
 
-## Reproduce locally (everything WORKS ✅)
+## Verify
 
 ```bash
-pnpm install
-pnpm build
-pnpm start
-curl -i http://localhost:3000/api/trpc/hello   # → 200 application/json
-curl -i http://localhost:3000/api/hello         # → 200 application/json
+pnpm install && pnpm build && pnpm start
+curl -i http://localhost:3000/api/trpc/hello   # 200 JSON locally
+
+# On a deployment, check which route handled the request:
+curl -sS -D - -o /dev/null "https://<deployment>/api/trpc/hello" | grep -iE 'HTTP/|x-matched-path|content-type'
+# Working : x-matched-path: /api/trpc/[trpc] , application/json , 200
+# Bug     : x-matched-path: /pt-BR/404       , text/html        , 404
 ```
 
-## Reproduce on Vercel (dynamic route BROKEN ❌)
-
-Deploy this repo to Vercel and run the `curl` commands under **Live demo** above. The dynamic
-route returns `404` with `x-matched-path: /pt-BR/404`; the static route still returns `200`.
-
-## Expected
-
-`/api/trpc/hello` should return `200` JSON on Vercel, identically to `next start`, with
-`x-matched-path: /api/trpc/[trpc]`.
+Suspected cause: the security patch **GHSA-36qx-fr4f-26g5** (16.2.5+) prepends the default
+locale to locale-less paths; in affected build environments this is applied to dynamic `/api/*`
+routes, rewriting `/api/trpc/x` → `/pt-BR/api/trpc/x`, which misses the API function.
